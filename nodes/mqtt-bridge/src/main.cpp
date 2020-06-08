@@ -42,10 +42,10 @@ void loop() {
 
     if (myIP != getLocalIP()) {
         myIP = getLocalIP();
-        Serial.println("My IP is " + myIP.toString());
+        Serial.println("CONNECTION: IP is " + myIP.toString());
 
         if (mqttClient.connect("painlessMeshClient")) {
-            Serial.println("Connected to MQTT Broker");
+            Serial.println("CONNECTION: Connected to MQTT Broker");
             publishGateway();
 
             mqttClient.subscribe("devices/+/+/to/#");
@@ -64,12 +64,13 @@ void receivedCallback(const uint32_t &from, const String &msg) {
     DynamicJsonDocument jsonDocument(256);
     deserializeJson(jsonDocument, msg);
 
-    Serial.printf("bridge: Received from %u msg=%s\n", from, msg.c_str());
+    Serial.printf("MESH: Received message from %u - %s\n", from, msg.c_str());
+    if (mqttClient.connected() && jsonDocument.containsKey("topic") && jsonDocument.containsKey("payload")) {
+        String topic = jsonDocument["topic"].as<String>();
+        String payload = jsonDocument["payload"].as<String>();
 
-    if (jsonDocument.containsKey("topic") && jsonDocument.containsKey("payload")) {
-        const char *topic = jsonDocument["topic"].as<char *>();
-        const char *payload = jsonDocument["payload"].as<char *>();
-        mqttClient.publish(topic, payload, true);
+        Serial.println("MESH -> MQTT: Forward message to MQTT broker, to " + topic + " - " + payload);
+        mqttClient.publish(topic.c_str(), payload.c_str(), true);
     }
 }
 
@@ -78,14 +79,24 @@ void mqttCallback(char *topic, uint8_t *payload, unsigned int length) {
     payload[length] = '\0';
     memcpy(cleanPayload, payload, length + 1);
 
-    Serial.printf("%s %s\n", topic, payload);
     String msg = String(cleanPayload);
     free(cleanPayload);
 
     uint32_t target = parseTarget(topic);
-    Serial.println(target);
+    Serial.printf("MQTT: Received notification for %s - %s and target %ul\n", topic, payload, target);
     if (mesh.isConnected(target)) {
-        mesh.sendSingle(target, msg);
+        DynamicJsonDocument doc(256);
+        doc["topic"] = String(topic);
+
+        DynamicJsonDocument msgJson(128);
+        deserializeJson(msgJson, msg);
+        doc["payload"] = msgJson;
+
+        String buf;
+        serializeJson(doc, buf);
+
+        Serial.println(String("MQTT -> Mesh: Forward message to node ") + target + " with payload " + buf);
+        mesh.sendSingle(target, buf.c_str());
     }
 }
 
@@ -97,7 +108,7 @@ uint32_t parseTarget(char *topic) {
     int indexOfThirdSlash = topicString.indexOf("/", indexOfSecondSlash + 1);
 
     String targetString = topicString.substring(indexOfSecondSlash + 1, indexOfThirdSlash);
-    return static_cast<uint32_t>(atoi(targetString.c_str()));
+    return strtoul(targetString.c_str(), nullptr, 0);
 }
 
 
