@@ -1,0 +1,16 @@
+# Configure a default setup of Home Assistant (frontend, api, etc)
+default_config:
+
+mqtt:
+    broker: mosqitto
+    discovery: true
+    discovery_prefix: devices
+
+# Text to speech
+tts:
+    -   platform: google_translate
+
+group: !include groups.yaml
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
