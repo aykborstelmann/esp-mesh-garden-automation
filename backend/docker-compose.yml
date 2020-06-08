@@ -4,12 +4,12 @@ services:
         image: homeassistant/home-assistant
         restart: always
         volumes:
-        - ./hass-config:/config
+            - ./hass-config:/config
         network_mode: host
         ports:
-        - "8123:8123"
+            - "8123:8123"
         depends_on:
-          - mosquitto
+            - mosquitto
     mosquitto:
         image: eclipse-mosquitto
         restart: always
