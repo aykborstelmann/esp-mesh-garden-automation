@@ -11,9 +11,9 @@ void mqttCallback(char *topic, byte *payload, unsigned int length);
 
 IPAddress getLocalIP();
 
-String putTopicTogether(const String &component, uint32_t nodeId, const String &messageType);
+void publishGateway();
 
-void publishDevice(const char *component, uint32_t id, const char *payload);
+uint32_t parseTarget(char *topic);
 
 IPAddress myIP(0, 0, 0, 0);
 IPAddress mqttBroker(192, 168, 176, 70);
@@ -46,22 +46,19 @@ void loop() {
 
         if (mqttClient.connect("painlessMeshClient")) {
             Serial.println("Connected to MQTT Broker");
-            publishDevice("gateway", mesh.getNodeId(), "{}");
+            publishGateway();
 
             mqttClient.subscribe("devices/+/+/to/#");
         }
     }
 }
 
-void publishDevice(const char *component, uint32_t id, const char *payload) {
-    String configTopic = putTopicTogether(component, id, "config");
-    mqttClient.publish(configTopic.c_str(), payload, true);
+
+void publishGateway() {
+    String configTopic = String("devices/gateway/") + mesh.getNodeId() + "/config";
+    mqttClient.publish(configTopic.c_str(), "{}", true);
 }
 
-String putTopicTogether(const String &component, uint32_t nodeId, const String &messageType) {
-    String topic = "devices/" + component + "/" + nodeId + "/" + messageType;
-    return topic;
-}
 
 void receivedCallback(const uint32_t &from, const String &msg) {
     DynamicJsonDocument jsonDocument(256);
@@ -85,7 +82,22 @@ void mqttCallback(char *topic, uint8_t *payload, unsigned int length) {
     String msg = String(cleanPayload);
     free(cleanPayload);
 
-    String targetStr = String(topic).substring(16);
+    uint32_t target = parseTarget(topic);
+    Serial.println(target);
+    if (mesh.isConnected(target)) {
+        mesh.sendSingle(target, msg);
+    }
+}
+
+uint32_t parseTarget(char *topic) {
+    String topicString(topic);
+
+    int indexOfFirstSlash = topicString.indexOf("/");
+    int indexOfSecondSlash = topicString.indexOf("/", indexOfFirstSlash + 1);
+    int indexOfThirdSlash = topicString.indexOf("/", indexOfSecondSlash + 1);
+
+    String targetString = topicString.substring(indexOfSecondSlash + 1, indexOfThirdSlash);
+    return static_cast<uint32_t>(atoi(targetString.c_str()));
 }
 
 
