@@ -27,3 +27,13 @@ Inspired by https://www.home-assistant.io/docs/mqtt/discovery/
 
 ## To node
 * Path `devices/<device_type>/<id>/to/`
+
+## Gateway notification
+The gateway publishes its id  to all nodes which are conected. This payload look like this
+```json
+{
+  "gateway": {
+    "node_id": "<id>",
+  }
+}
+```

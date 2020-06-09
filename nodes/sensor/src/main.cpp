@@ -9,24 +9,31 @@
 Scheduler userScheduler;
 painlessMesh mesh;
 
-bool light_status = false;
+uint32_t gateway = 0;
 
 void sendMessage();
 
 String generateStatusString();
 
+void publishNode();
+
+String constructTopic();
+
 Task taskSendMessage(TASK_SECOND * REPORT_STATE_INT, TASK_FOREVER, &sendMessage);
 
 void sendMessage() {
-    String msg = generateStatusString();
-    mesh.sendBroadcast(msg);
+    if (gateway != 0) {
+        String msg = generateStatusString();
+        mesh.sendSingle(gateway, msg);
+    }
 }
 
 String generateStatusString() {
+    bool light_status = digitalRead(LIGHT_PIN);
+
     DynamicJsonDocument doc(256);
-    doc["topic"] = String("devices/switch/") + mesh.getNodeId() + "/state";
-    JsonObject payload = doc.createNestedObject("payload");
-    payload["light"] = light_status;
+    doc["topic"] = constructTopic() + "/state";
+    doc["payload"] = light_status ? "ON" : "OFF";
 
     String msg;
     serializeJson(doc, msg);
@@ -37,18 +44,49 @@ void receivedCallback(uint32_t from, String &msg) {
     DynamicJsonDocument doc(256);
     deserializeJson(doc, msg);
 
-    if (doc.containsKey("topic") && doc.containsKey("payload")) {
+    if (doc.containsKey("gateway") && doc["gateway"].containsKey("node_id")) {
+        gateway = doc["gateway"]["node_id"];
+        publishNode();
+        taskSendMessage.enable();
+    } else if (doc.containsKey("topic") && doc.containsKey("payload")) {
         String topic = doc["topic"].as<String>();
 
         if (topic.endsWith("set")) {
-            if (doc["payload"].containsKey("light")) {
-                bool newLightState = doc["payload"]["light"].as<bool>();
-                digitalWrite(LIGHT_PIN, newLightState);
+            if (doc["payload"] == "ON") {
+                digitalWrite(LIGHT_PIN, HIGH);
+            } else if (doc["payload"] == "OFF") {
+                digitalWrite(LIGHT_PIN, LOW);
+            } else {
+                Serial.println("ERROR: Could not parse message");
             }
+            sendMessage();
         }
     }
 
     Serial.printf("Received from %u msg=%s\n", from, msg.c_str());
+}
+
+void publishNode() {
+    DynamicJsonDocument jsonDocument(512);
+    const String &ownTopic = constructTopic();
+
+    jsonDocument["topic"] = ownTopic + "/config";
+    JsonObject payload = jsonDocument.createNestedObject("payload");
+    payload["~"] = ownTopic;
+    payload["name"] = HR_NAME;
+    payload["unique_id"] = String(mesh.getNodeId());
+    payload["cmd_t"] = "~/to/set";
+    payload["stat_t"] = "~/state";
+    payload["schema"] = "json",
+    payload["brightness"] = false;
+
+    String publicationMessage;
+    serializeJson(jsonDocument, publicationMessage);
+    mesh.sendSingle(gateway, publicationMessage.c_str());
+}
+
+String constructTopic() {
+    return String("devices/light/") + mesh.getNodeId();
 }
 
 void newConnectionCallback(uint32_t nodeId) {
@@ -78,7 +116,6 @@ void setup() {
     mesh.onNodeTimeAdjusted(&nodeTimeAdjustedCallback);
 
     userScheduler.addTask(taskSendMessage);
-    taskSendMessage.enable();
 }
 
 void loop() {

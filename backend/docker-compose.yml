@@ -1,11 +1,10 @@
-version: '2'
+version: '3'
 services:
     homassistant:
         image: homeassistant/home-assistant
         restart: always
         volumes:
             - ./hass-config:/config
-        network_mode: host
         ports:
             - "8123:8123"
         depends_on:

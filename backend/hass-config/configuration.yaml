@@ -2,7 +2,8 @@
 default_config:
 
 mqtt:
-    broker: mosqitto
+    broker: mosquitto
+    client_id: home-assistant
     discovery: true
     discovery_prefix: devices
 

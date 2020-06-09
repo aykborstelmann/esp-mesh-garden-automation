@@ -4,10 +4,13 @@
 #include <WiFiClient.h>
 
 #include "config.h"
+#include "BridgeAwareMesh.h"
 
 void receivedCallback(const uint32_t &from, const String &msg);
 
 void mqttCallback(char *topic, byte *payload, unsigned int length);
+
+void newConnectionCallback(const uint32_t &id);
 
 IPAddress getLocalIP();
 
@@ -15,10 +18,12 @@ void publishGateway();
 
 uint32_t parseTarget(char *topic);
 
+String constructGatewayPublication();
+
 IPAddress myIP(0, 0, 0, 0);
 IPAddress mqttBroker(192, 168, 176, 70);
 
-painlessMesh mesh;
+BridgeAwareMesh mesh;
 WiFiClient wifiClient;
 PubSubClient mqttClient(mqttBroker, 1883, mqttCallback, wifiClient);
 
@@ -28,6 +33,7 @@ void setup() {
 
     mesh.init(MESH_PREFIX, MESH_PASSWORD, MESH_PORT, WIFI_AP_STA, CHANNEL);
     mesh.onReceive(&receivedCallback);
+    mesh.onNewConnection(&newConnectionCallback);
 
     mesh.stationManual(STATION_SSID, STATION_PASSWORD);
     mesh.setHostname(HOSTNAME);
@@ -57,8 +63,27 @@ void loop() {
 void publishGateway() {
     String configTopic = String("devices/gateway/") + mesh.getNodeId() + "/config";
     mqttClient.publish(configTopic.c_str(), "{}", true);
+
+    String publishGatewayMessage = constructGatewayPublication();
+    mesh.sendBroadcast(publishGatewayMessage.c_str());
 }
 
+void newConnectionCallback(const uint32_t &id) {
+    if (mqttClient.connected()) {
+        Serial.println("MESH: Publishing ");
+        String publicationMessage = constructGatewayPublication();
+        mesh.sendSingle(id, publicationMessage.c_str());
+    }
+}
+
+String constructGatewayPublication() {
+    String publicationMessage;
+    DynamicJsonDocument jsonDocument(256);
+    JsonObject gateway = jsonDocument.createNestedObject("gateway");
+    gateway["node_id"] = mesh.getNodeId();
+    serializeJson(jsonDocument, publicationMessage);
+    return publicationMessage;
+}
 
 void receivedCallback(const uint32_t &from, const String &msg) {
     DynamicJsonDocument jsonDocument(256);
@@ -87,10 +112,7 @@ void mqttCallback(char *topic, uint8_t *payload, unsigned int length) {
     if (mesh.isConnected(target)) {
         DynamicJsonDocument doc(256);
         doc["topic"] = String(topic);
-
-        DynamicJsonDocument msgJson(128);
-        deserializeJson(msgJson, msg);
-        doc["payload"] = msgJson;
+        doc["payload"] = msg;
 
         String buf;
         serializeJson(doc, buf);
@@ -99,6 +121,7 @@ void mqttCallback(char *topic, uint8_t *payload, unsigned int length) {
         mesh.sendSingle(target, buf.c_str());
     }
 }
+
 
 uint32_t parseTarget(char *topic) {
     String topicString(topic);
@@ -110,7 +133,6 @@ uint32_t parseTarget(char *topic) {
     String targetString = topicString.substring(indexOfSecondSlash + 1, indexOfThirdSlash);
     return strtoul(targetString.c_str(), nullptr, 0);
 }
-
 
 IPAddress getLocalIP() {
     return IPAddress(mesh.getStationIP());
