@@ -4,7 +4,6 @@
 #include <WiFiClient.h>
 
 #include "config.h"
-#include "BridgeAwareMesh.h"
 
 void receivedCallback(const uint32_t &from, const String &msg);
 
@@ -23,7 +22,7 @@ String constructGatewayPublication();
 IPAddress myIP(0, 0, 0, 0);
 IPAddress mqttBroker(192, 168, 176, 70);
 
-BridgeAwareMesh mesh;
+painlessMesh mesh;
 WiFiClient wifiClient;
 PubSubClient mqttClient(mqttBroker, 1883, mqttCallback, wifiClient);
 
