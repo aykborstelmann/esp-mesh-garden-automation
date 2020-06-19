@@ -1,89 +1,96 @@
 #include <Arduino.h>
 #include <painlessMesh.h>
+#include <MqttMesh.h>
+#include <RunningMedian.h>
+#include <math.h>
 
 #include "config.h"
-#include "BridgeAwareMesh.h"
 
-#define REPORT_STATE_INT 20
-#define LIGHT_PIN D2
+#define REPORT_STATE_INT 3
+#define DEVICE_TYPE "sensor"
+
+
+#define SENSOR_PIN A0
+#define SENSOR_POWER_PIN D1
+
+#define SENSORS_MAX 800.0
+#define SENSORS_MIN 312.0
 
 Scheduler userScheduler;
-BridgeAwareMesh mesh;
+MqttMesh mesh;
 
-void sendMessage();
+void measure();
 
-Task taskSendMessage(TASK_SECOND * REPORT_STATE_INT, TASK_FOREVER, &sendMessage);
+Task taskMeasure(TASK_SECOND * REPORT_STATE_INT, TASK_FOREVER, &measure);
 
 String constructTopic() {
-    return String("devices/light/") + mesh.getNodeId();
+    return String("devices/") + DEVICE_TYPE + "/" + mesh.getNodeId();
 }
 
-String generateStatusString() {
-    bool light_status = digitalRead(LIGHT_PIN);
-
-    DynamicJsonDocument doc(256);
-    doc["topic"] = constructTopic() + "/state";
-    doc["payload"] = light_status ? "ON" : "OFF";
-
-    String msg;
-    serializeJson(doc, msg);
-    return msg;
+int readMoistureOnce() {
+    return analogRead(SENSOR_PIN);
 }
 
-void sendMessage() {
-    String msg = generateStatusString();
-    mesh.sendToGateway(msg);
-}
+double readMoisture() {
+    Serial.println("MEASUREMENT - Start -----");
 
-void receivedFromGatewayCallback(String &msg) {
-    Serial.printf("Received from gateway - %s\n", msg.c_str());
+    const int measurements = 5;
+    RunningMedian median = RunningMedian(measurements);
 
-    DynamicJsonDocument doc(256);
-    deserializeJson(doc, msg);
-
-    if (doc.containsKey("topic") && doc.containsKey("payload")) {
-        String topic = doc["topic"].as<String>();
-
-        if (topic.endsWith("set")) {
-            if (doc["payload"] == "ON") {
-                digitalWrite(LIGHT_PIN, HIGH);
-            } else if (doc["payload"] == "OFF") {
-                digitalWrite(LIGHT_PIN, LOW);
-            } else {
-                Serial.println("ERROR: Could not parse message");
-            }
-            sendMessage();
-        }
+    for (int i = 0; i < measurements; i++) {
+        auto value = (float) readMoistureOnce();
+        Serial.println(String("MEASUREMENT - Value ") + i + " " + value);
+        median.add(value);
     }
+
+
+    float average = median.getAverage(measurements - 2);
+    Serial.println(String("MEASUREMENT - Average ") + average);
+
+
+    const double percent = ((average - SENSORS_MAX) / (SENSORS_MIN - SENSORS_MAX)) * 100.0;
+
+    Serial.println(String("MEASUREMENT - Percent ") + percent);
+
+    Serial.println("MEASUREMENT - End -----");
+    return round(percent * 100) / 100;
 }
 
-void receivedCallback(uint32_t from, String &msg) {
-    Serial.printf("Received from %u - %s\n", from, msg.c_str());
+void measure() {
+    DynamicJsonDocument jsonDocument(128);
+    jsonDocument["moisture"] = readMoisture();
+
+    String statePayload;
+    serializeJson(jsonDocument, statePayload);
+
+    Serial.println("MESH -> MQTT: " + statePayload);
+
+    mesh.sendMqtt(constructTopic() + "/state", statePayload);
+}
+
+void mqttReceivedCallback(String &topic, String &payload) {
+    Serial.printf("Received from MQTT - %s - %s", topic.c_str(), payload.c_str());
 }
 
 void publishCallback() {
     Serial.println("MESH -> BRIDGE: Publishing node, got notification");
 
-    DynamicJsonDocument jsonDocument(512);
-    const String &ownTopic = constructTopic();
+    DynamicJsonDocument configJson(512);
 
-    jsonDocument["topic"] = ownTopic + "/config";
-    JsonObject payload = jsonDocument.createNestedObject("payload");
-    payload["~"] = ownTopic;
-    payload["name"] = HR_NAME;
-    payload["unique_id"] = String(mesh.getNodeId());
-    payload["cmd_t"] = "~/to/set";
-    payload["stat_t"] = "~/state";
-    payload["schema"] = "json",
-            payload["brightness"] = false;
+    configJson["name"] = HR_NAME;
+    configJson["unique_id"] = String(mesh.getNodeId());
+    configJson["device_class"] = "humidity";
+    configJson["stat_t"] = constructTopic() + "/state";
+    configJson["unit_of_measurement"] = "%";
+    configJson["value_template"] = "{{ value_json.moisture}}";
 
-    String configMessage;
-    serializeJson(jsonDocument, configMessage);
-    mesh.sendToGateway(configMessage);
+    String configPayload;
+    serializeJson(configJson, configPayload);
 
-    Serial.println("MESH -> BRIDGE: Config message: " + configMessage);
+    mesh.sendMqtt(constructTopic() + "/config", configPayload);
 
-    taskSendMessage.enable();
+    Serial.println("MESH -> BRIDGE: Config message: " + configPayload);
+    taskMeasure.enable();
 }
 
 void newConnectionCallback(uint32_t nodeId) {
@@ -102,19 +109,19 @@ void setup() {
     Serial.begin(115200);
     mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
 
-    pinMode(LIGHT_PIN, OUTPUT);
-
     mesh.init(MESH_PREFIX, MESH_PASSWORD, &userScheduler, MESH_PORT);
     mesh.setContainsRoot(true);
 
-    mesh.onReceive(&receivedCallback);
-    mesh.onReceivedFromGateway(receivedFromGatewayCallback);
+    mesh.onBridgeAvailable(&publishCallback);
     mesh.onNewConnection(&newConnectionCallback);
-    mesh.onShouldPublish(&publishCallback);
+    mesh.onMqttReceived(&mqttReceivedCallback);
+    mesh.onReceivedFromGateway([](String &msg) {
+        Serial.println(msg);
+    });
     mesh.onChangedConnections(&changedConnectionCallback);
     mesh.onNodeTimeAdjusted(&nodeTimeAdjustedCallback);
 
-    userScheduler.addTask(taskSendMessage);
+    userScheduler.addTask(taskMeasure);
 }
 
 void loop() {

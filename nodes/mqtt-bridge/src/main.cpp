@@ -13,8 +13,6 @@ void newConnectionCallback(const uint32_t &id);
 
 IPAddress getLocalIP();
 
-void publishGateway();
-
 uint32_t parseTarget(char *topic);
 
 String constructGatewayPublication();
@@ -41,6 +39,24 @@ void setup() {
     mesh.setContainsRoot(true);
 }
 
+void publishGatewayToMesh() {
+    String configTopic = String("devices/gateway/") + mesh.getNodeId() + "/config";
+    mqttClient.publish(configTopic.c_str(), "{}", true);
+
+    String publishGatewayMessage = constructGatewayPublication();
+    mesh.sendBroadcast(publishGatewayMessage.c_str());
+}
+
+void connectMqttClient() {
+    if (mqttClient.connect("painlessMeshClient")) {
+        Serial.println("CONNECTION: Connected to MQTT Broker");
+        publishGatewayToMesh();
+
+        mqttClient.subscribe("devices/+/+/to/#");
+    }
+}
+
+
 void loop() {
     mesh.update();
     mqttClient.loop();
@@ -49,22 +65,12 @@ void loop() {
         myIP = getLocalIP();
         Serial.println("CONNECTION: IP is " + myIP.toString());
 
-        if (mqttClient.connect("painlessMeshClient")) {
-            Serial.println("CONNECTION: Connected to MQTT Broker");
-            publishGateway();
-
-            mqttClient.subscribe("devices/+/+/to/#");
-        }
+        connectMqttClient();
     }
-}
 
-
-void publishGateway() {
-    String configTopic = String("devices/gateway/") + mesh.getNodeId() + "/config";
-    mqttClient.publish(configTopic.c_str(), "{}", true);
-
-    String publishGatewayMessage = constructGatewayPublication();
-    mesh.sendBroadcast(publishGatewayMessage.c_str());
+    if (!mqttClient.connected()) {
+        connectMqttClient();
+    }
 }
 
 void newConnectionCallback(const uint32_t &id) {
@@ -85,7 +91,7 @@ String constructGatewayPublication() {
 }
 
 void receivedCallback(const uint32_t &from, const String &msg) {
-    DynamicJsonDocument jsonDocument(256);
+    DynamicJsonDocument jsonDocument(1024);
     deserializeJson(jsonDocument, msg);
 
     Serial.printf("MESH: Received message from %u - %s\n", from, msg.c_str());
@@ -109,7 +115,7 @@ void mqttCallback(char *topic, uint8_t *payload, unsigned int length) {
     uint32_t target = parseTarget(topic);
     Serial.printf("MQTT: Received notification for %s - %s and target %ul\n", topic, payload, target);
     if (mesh.isConnected(target)) {
-        DynamicJsonDocument doc(256);
+        DynamicJsonDocument doc(512);
         doc["topic"] = String(topic);
         doc["payload"] = msg;
 

@@ -5,6 +5,6 @@
 #define MESH_PASSWORD "somethingSneaky"
 #define MESH_PORT 5555
 
-#define HR_NAME "Light"
+#define HR_NAME "Moisture Sensor"
 
 #endif
