@@ -2,77 +2,89 @@
 #include <painlessMesh.h>
 #include <MqttMesh.h>
 #include <RunningMedian.h>
-#include <math.h>
+#include <cmath>
 
 #include "config.h"
-
-#define REPORT_STATE_INT 3
-#define DEVICE_TYPE "sensor"
-
-
-#define SENSOR_PIN A0
-#define SENSOR_POWER_PIN D1
-
-#define SENSORS_MAX 800.0
-#define SENSORS_MIN 312.0
 
 Scheduler userScheduler;
 MqttMesh mesh;
 
-void measure();
+// Task callbacks
+void sleep();
 
-Task taskMeasure(TASK_SECOND * REPORT_STATE_INT, TASK_FOREVER, &measure);
+bool turnSensorOn();
 
-String constructTopic() {
+void measureMoistureAndSend();
+
+Task taskMeasure(TASK_IMMEDIATE, TASK_ONCE, nullptr, &userScheduler, false, &turnSensorOn, &measureMoistureAndSend);
+
+Task taskSleep(TASK_IMMEDIATE, TASK_ONCE, &sleep, &userScheduler);
+
+String topicPath() {
     return String("devices/") + DEVICE_TYPE + "/" + mesh.getNodeId();
 }
 
-int readMoistureOnce() {
+int readSensorValue() {
     return analogRead(SENSOR_PIN);
 }
 
-double readMoisture() {
-    Serial.println("MEASUREMENT - Start -----");
+void turnSensorOff() {
+    Serial.println(String("MEASUREMENT - Turn off Sensor ") + millis());
+    digitalWrite(SENSOR_POWER_PIN, LOW);
+}
 
-    const int measurements = 5;
-    RunningMedian median = RunningMedian(measurements);
+double readAndNormalizeSensorValue() {
+    Serial.println(String("MEASUREMENT - Start -----") + millis());
 
-    for (int i = 0; i < measurements; i++) {
-        auto value = (float) readMoistureOnce();
+    RunningMedian median = RunningMedian(MEASUREMENTS);
+
+    for (int i = 0; i < MEASUREMENTS; i++) {
+        auto value = (float) readSensorValue();
         Serial.println(String("MEASUREMENT - Value ") + i + " " + value);
         median.add(value);
     }
 
-
-    float average = median.getAverage(measurements - 2);
+    float average = median.getAverage(MEASUREMENTS - 2);
     Serial.println(String("MEASUREMENT - Average ") + average);
 
-
-    const double percent = ((average - SENSORS_MAX) / (SENSORS_MIN - SENSORS_MAX)) * 100.0;
+    const double percent = map((long) average, SENSORS_MIN, SENSORS_MAX, 100, 0);
 
     Serial.println(String("MEASUREMENT - Percent ") + percent);
 
     Serial.println("MEASUREMENT - End -----");
+
+    turnSensorOff();
+
     return round(percent * 100) / 100;
 }
 
-void measure() {
+void measureMoistureAndSend() {
     DynamicJsonDocument jsonDocument(128);
-    jsonDocument["moisture"] = readMoisture();
+    jsonDocument["moisture"] = readAndNormalizeSensorValue();
 
     String statePayload;
     serializeJson(jsonDocument, statePayload);
 
     Serial.println("MESH -> MQTT: " + statePayload);
 
-    mesh.sendMqtt(constructTopic() + "/state", statePayload);
+    mesh.sendMqtt(topicPath() + "/state", statePayload);
+
+    taskSleep.enableDelayed(TASK_MILLISECOND * 150);
 }
 
-void mqttReceivedCallback(String &topic, String &payload) {
-    Serial.printf("Received from MQTT - %s - %s", topic.c_str(), payload.c_str());
+bool turnSensorOn() {
+    Serial.println(String("MEASUREMENT - Turn on Sensor ") + millis());
+    digitalWrite(SENSOR_POWER_PIN, HIGH);
+    return true;
 }
 
-void publishCallback() {
+void sleep() {
+    Serial.println("DEEP_SLEEP: Enable");
+    mesh.stop();
+    ESP.deepSleep(SLEEP_TIME * 1000000, WAKE_RF_DEFAULT);
+}
+
+void introduceSensor() {
     Serial.println("MESH -> BRIDGE: Publishing node, got notification");
 
     DynamicJsonDocument configJson(512);
@@ -80,48 +92,40 @@ void publishCallback() {
     configJson["name"] = HR_NAME;
     configJson["unique_id"] = String(mesh.getNodeId());
     configJson["device_class"] = "humidity";
-    configJson["stat_t"] = constructTopic() + "/state";
+    configJson["stat_t"] = topicPath() + "/state";
     configJson["unit_of_measurement"] = "%";
+    configJson["frc_upd"] = true;
     configJson["value_template"] = "{{ value_json.moisture}}";
 
     String configPayload;
     serializeJson(configJson, configPayload);
 
-    mesh.sendMqtt(constructTopic() + "/config", configPayload);
+    mesh.sendMqtt(topicPath() + "/config", configPayload);
 
     Serial.println("MESH -> BRIDGE: Config message: " + configPayload);
-    taskMeasure.enable();
 }
 
-void newConnectionCallback(uint32_t nodeId) {
-    Serial.printf("--> startHere: New Connection, nodeId = %u\n", nodeId);
-}
+void bridgeAvailableCallback() {
+    // Turn of automatic sleep
+    taskSleep.disable();
+    introduceSensor();
 
-void changedConnectionCallback() {
-    Serial.printf("Changed connections\n");
-}
-
-void nodeTimeAdjustedCallback(int32_t offset) {
-    Serial.printf("Adjusted time %u. Offset = %d\n", mesh.getNodeTime(), offset);
+    taskMeasure.enableDelayed(TASK_MILLISECOND * 1000);
 }
 
 void setup() {
     Serial.begin(115200);
+    pinMode(SENSOR_POWER_PIN, OUTPUT);
+
     mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
 
     mesh.init(MESH_PREFIX, MESH_PASSWORD, &userScheduler, MESH_PORT);
     mesh.setContainsRoot(true);
 
-    mesh.onBridgeAvailable(&publishCallback);
-    mesh.onNewConnection(&newConnectionCallback);
-    mesh.onMqttReceived(&mqttReceivedCallback);
-    mesh.onReceivedFromGateway([](String &msg) {
-        Serial.println(msg);
-    });
-    mesh.onChangedConnections(&changedConnectionCallback);
-    mesh.onNodeTimeAdjusted(&nodeTimeAdjustedCallback);
+    mesh.onBridgeAvailable(&bridgeAvailableCallback);
 
-    userScheduler.addTask(taskMeasure);
+    // Automatically sleep after 2 minutes also if not connected
+    taskSleep.enableDelayed(TASK_MINUTE * 2);
 }
 
 void loop() {
