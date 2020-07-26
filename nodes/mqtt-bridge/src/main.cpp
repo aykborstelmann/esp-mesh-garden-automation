@@ -18,7 +18,7 @@ uint32_t parseTarget(char *topic);
 String constructGatewayPublication();
 
 IPAddress myIP(0, 0, 0, 0);
-IPAddress mqttBroker(192, 168, 176, 70);
+IPAddress mqttBroker(192, 168, 176, 6);
 
 painlessMesh mesh;
 WiFiClient wifiClient;
