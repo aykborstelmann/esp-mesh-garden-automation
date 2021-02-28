@@ -13,8 +13,8 @@
 #define SENSOR_POWER_PIN D1
 #define MEASUREMENTS 5
 
-#define SENSORS_MAX 830.0
-#define SENSORS_MIN 265.0
+#define SENSORS_MAX 813.0
+#define SENSORS_MIN 405.0
 
 #define SLEEP_TIME 900
 
